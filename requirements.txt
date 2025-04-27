@@ -1,0 +1,17 @@
+# Core deep learning libraries
+torch==2.3.1
+torchvision==0.18.1
+# Note: Ensure these PyTorch versions match your system/CUDA installation.
+
+# Data handling and utilities
+numpy==1.26.4
+PyYAML==6.0.1
+
+# Optional, for plotting 
+matplotlib==3.9.0
+pandas==2.2.2
+seaborn==0.13.2
+
+# Optional, for FEMNIST dataset (if using LEAF)
+h5py==3.11.0
+Pillow==10.3.0

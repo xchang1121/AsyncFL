@@ -1,0 +1,95 @@
+# config.yaml - Example Configuration
+
+experiment_name: "cifar10_noniid_comparison"
+seed: 42
+repetitions: 1 # Number of times to repeat the experiment with different seeds
+
+# --- Dataset Configuration ---
+dataset:
+  name: "cifar10" # or "femnist"
+  data_root: "./data"
+  partition:
+    num_clients: 100
+    type: "dirichlet" # or "native" for femnist
+    alpha: 0.1      # Dirichlet parameter (lower means more non-iid)
+
+# --- Model Configuration ---
+model:
+  name: "resnet18_cifar" # or "cnn_cifar"
+  num_classes: 10 # Should match dataset
+
+# --- Simulation Configuration ---
+simulation:
+  # Stopping criteria (use one or both)
+  max_server_iterations: 500 # Max server steps (rounds for sync, buffer flushes/updates for async)
+  max_applied_updates: 10000 # Max client updates applied (for vanilla_asgd, delay_adaptive)
+  max_wall_time_seconds: 3600 # Max simulation time in seconds
+  
+  # Evaluation
+  eval_interval: 10 # Evaluate every X server iterations / applied updates
+  
+  # Clients
+  local_epochs: 2
+  batch_size: 50
+  optimizer:
+    name: "sgd"
+    params:
+      lr: 0.01       # Client learning rate (eta_l)
+      momentum: 0.9
+      weight_decay: 0.0001
+      
+  # Delay Simulation (for async algorithms)
+  delay_config:
+    distribution_type: "mixed_exponential" # 'exponential', 'mixed_uniform', 'mixed_exponential'
+    params: 
+       # For exponential: beta: 2.0 
+       # For mixed_*: Needs assign_client_speeds called
+       slow_fraction: 0.2 
+       fast_beta: 0.5
+       slow_beta: 5.0
+       # fast_min: 0.5, fast_max: 1.5, slow_min: 4.0, slow_max: 8.0 # For mixed_uniform
+
+# --- Algorithms Configuration ---
+# List the algorithms to run in this experiment
+algorithms:
+  - name: "fedavg"
+    params:
+      client_fraction: 0.1 # Fraction of clients per round
+
+  - name: "fedbuff"
+    params:
+      concurrency: 20      # Mc
+      buffer_size_k: 10    # K (or M)
+      server_lr: 1.0       # eta_g
+
+  - name: "ca2fl"
+    params:
+      concurrency: 20
+      buffer_size_k: 10
+      server_lr: 1.0
+      
+  - name: "vanilla_asgd"
+    params:
+      concurrency: 20 
+      server_lr: 0.5 # Typically needs smaller LR
+
+  - name: "delay_adaptive_afl"
+    params:
+      concurrency: 20
+      server_lr: 1.0 # Base eta
+      staleness_threshold_tau_c: 20 # Defaults to concurrency if not set
+
+  - name: "malenia_sgd"
+    params:
+       malenia_S: 100 # Number of valid gradients to collect per server iter
+       server_lr: 1.0
+       # Concurrency is implicitly n for Malenia
+
+  - name: "stalesgd_bda"
+    params:
+      tau_algo: 50 # Max delay threshold for BDA variant
+      server_lr: 1.0
+      # Concurrency is implicitly n for StaleSGD
+
+# --- Output Configuration ---
+results_dir: "./results"
