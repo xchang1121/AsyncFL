@@ -94,8 +94,8 @@ class BaseServer:
         for client_weights, num_samples in updates:
             weight = num_samples / total_samples
             for key in aggregated_weights:
-                 # Ensure weights are on the same device before aggregation
-                 aggregated_weights[key] += client_weights[key].to(self.device) * weight
+                # Ensure weights are on the same device before aggregation
+                aggregated_weights[key] = aggregated_weights[key].float() + client_weights[key].to(self.device) * weight
                  
         return aggregated_weights
 
@@ -143,7 +143,7 @@ class BaseServer:
              self.results['train_loss'].append(self.results['train_loss'][-1] if self.results['train_loss'] else None)
 
 
-         print(f"Iter: {self.current_server_iteration:<4} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Avg Train Loss: {avg_train_loss if avg_train_loss is not None else 'N/A':7.4f}")
+         print(f"Iter: {self.current_server_iteration:<4} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Avg Train Loss: {f'{avg_train_loss:7.4f}' if avg_train_loss is not None else 'N/A'}")
 
 
     def run(self):

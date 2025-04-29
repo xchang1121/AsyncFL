@@ -1,13 +1,14 @@
 # experiments/experiment_manager.py
 
 import torch
+import torch.nn as nn
 import yaml
 import os
 import copy
 import random
 import numpy as np
 from datetime import datetime
-from typing import Dict, Any, Type
+from typing import List, Dict, Any, Type, Tuple
 
 # Import necessary components from other modules
 from datasets.cifar10 import CIFAR10Dataset

@@ -3,12 +3,13 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import time
 import copy
 import heapq # For event queue simulation
 import random
-import math
+
+from algorithms.vanilla_asgd import VanillaASGDServer # Importing the base class for reference
 
 # Assuming BaseServer is in server.base_server and BaseClient in clients.base_client
 from server.base_server import BaseServer
