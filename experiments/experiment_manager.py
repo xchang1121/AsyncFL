@@ -9,29 +9,40 @@ import random
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Type, Tuple
+import traceback # For better error printing
 
 # Import necessary components from other modules
+# Dataset Imports
 from datasets.cifar10 import CIFAR10Dataset
 # from datasets.femnist import FEMNISTDataset # Add when implemented
+from datasets.base_dataset import BaseDataset # Useful for type hinting
+
+# Model Imports
 from models.resnet import ResNet18_CIFAR
 from models.cnn import CNN_CIFAR
-from clients.base_client import BaseClient
-from server.base_server import BaseServer 
 
-# Import Server implementations
+# Client Import (Use the modified version)
+from clients.base_client import BaseClient
+
+# Server Imports
+from server.base_server import BaseServer
 from algorithms.fedavg import FedAvgServer
 from algorithms.fedbuff import FedBuffServer
 from algorithms.ca2fl import CA2FLServer
 from algorithms.vanilla_asgd import VanillaASGDServer
 from algorithms.delay_adaptive import DelayAdaptiveAFLServer
 from algorithms.malenia_sgd import MaleniaSGDServer
-from algorithms.stalesgd import StaleSGDServer
-from algorithms.stalesgd_conceptual import StaleSGDConceptualServer
+from algorithms.stalesgd import StaleSGDServer # BDA Variant
+# Import the specific conceptual server (Option A implementation)
+from algorithms.stalesgd_conceptual import StaleSGDConceptualServer # Assuming this is the Option A code
 
 # Import utilities
-from utils.simulation import assign_client_speeds
+from utils.simulation import assign_client_speeds # Only needed if using mixed delays
+
+# --- Mappings ---
 
 # Map algorithm names from config to Server classes
+# Ensure this matches the server class names exactly
 ALGORITHM_MAP: Dict[str, Type[BaseServer]] = {
     "fedavg": FedAvgServer,
     "fedbuff": FedBuffServer,
@@ -39,14 +50,14 @@ ALGORITHM_MAP: Dict[str, Type[BaseServer]] = {
     "vanilla_asgd": VanillaASGDServer,
     "delay_adaptive_afl": DelayAdaptiveAFLServer,
     "malenia_sgd": MaleniaSGDServer,
-    "stalesgd_bda": StaleSGDServer,
-    "stalesgd_conceptual": StaleSGDConceptualServer
+    "stalesgd_bda": StaleSGDServer, # The practical BDA variant
+    "stalesgd_conceptual": StaleSGDConceptualServer, # The conceptual Option A variant
 }
 
 # Map dataset names from config to Dataset classes
-DATASET_MAP = {
+DATASET_MAP: Dict[str, Type[BaseDataset]] = {
     "cifar10": CIFAR10Dataset,
-    # "femnist": FEMNISTDataset, 
+    # "femnist": FEMNISTDataset,
 }
 
 # Map model names from config to model functions/classes
@@ -54,6 +65,8 @@ MODEL_MAP = {
     "resnet18_cifar": ResNet18_CIFAR,
     "cnn_cifar": CNN_CIFAR,
 }
+
+# --- Experiment Manager Class ---
 
 class ExperimentManager:
     """ Manages the setup and execution of federated learning experiments. """
@@ -65,25 +78,54 @@ class ExperimentManager:
         Args:
             config_path (str): Path to the YAML configuration file.
         """
+        if not os.path.exists(config_path):
+             raise FileNotFoundError(f"Configuration file not found at: {config_path}")
+
+        print(f"Loading configuration from: {config_path}")
         with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-        
+            try:
+                self.config = yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                 print(f"Error parsing YAML file: {e}")
+                 raise
+
+        # Basic configuration validation
+        if not isinstance(self.config, dict):
+             raise ValueError("Invalid configuration format. Root should be a dictionary.")
+        required_keys = ['dataset', 'model', 'simulation', 'algorithms']
+        for key in required_keys:
+             if key not in self.config:
+                  raise ValueError(f"Missing required configuration section: '{key}'")
+
+
         self.base_seed = self.config.get('seed', 42)
         self.repetitions = self.config.get('repetitions', 1)
-        
+
         # Create results directory
         self.results_base_dir = self.config.get('results_dir', './results')
         self.experiment_name = self.config.get('experiment_name', 'fl_experiment')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.experiment_run_dir = os.path.join(self.results_base_dir, f"{self.experiment_name}_{timestamp}")
-        os.makedirs(self.experiment_run_dir, exist_ok=True)
-        
-        # Save config used for this run
-        with open(os.path.join(self.experiment_run_dir, 'config.yaml'), 'w') as f:
-            yaml.dump(self.config, f, default_flow_style=False)
+        try:
+            os.makedirs(self.experiment_run_dir, exist_ok=True)
+            print(f"Results will be saved in: {self.experiment_run_dir}")
+        except OSError as e:
+             print(f"Error creating results directory {self.experiment_run_dir}: {e}")
+             raise
 
+        # Save config used for this run
+        try:
+            config_save_path = os.path.join(self.experiment_run_dir, 'config.yaml')
+            with open(config_save_path, 'w') as f:
+                yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+        except IOError as e:
+             print(f"Warning: Could not save config file to results directory: {e}")
+
+        # Determine device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
+        if str(self.device) == "cuda":
+            print(f"CUDA Device Name: {torch.cuda.get_device_name(0)}")
 
 
     def _set_seed(self, seed):
@@ -94,143 +136,274 @@ class ExperimentManager:
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-            # Potentially set deterministic algorithms
+            # Optional: Configure cuDNN for determinism (can impact performance)
             # torch.backends.cudnn.deterministic = True
             # torch.backends.cudnn.benchmark = False
+        print(f"Set seed for reproducibility: {seed}")
 
-    def _setup_single_run(self, run_seed: int) -> Tuple[Any, List[BaseClient], Any, Dict[str, Any]]:
-        """ Sets up dataset, model, and clients for a single run. """
+
+    def _setup_single_run(self, run_seed: int) -> Tuple[nn.Module, List[BaseClient], DataLoader, Dict[str, Any]]:
+        """ Sets up dataset, model, and clients for a single run. Returns CPU model structure. """
         self._set_seed(run_seed)
-        
+
         # --- Dataset Setup ---
         ds_config = self.config['dataset']
-        dataset_class = DATASET_MAP.get(ds_config['name'].lower())
+        ds_name = ds_config.get('name', '').lower()
+        dataset_class = DATASET_MAP.get(ds_name)
         if dataset_class is None:
-            raise ValueError(f"Unknown dataset: {ds_config['name']}")
-        
-        dataset = dataset_class(data_root=ds_config['data_root'])
-        dataset.load_data()
-        
-        num_clients = ds_config['partition']['num_clients']
-        # Partition data - specific logic might depend on dataset type
-        if ds_config['name'].lower() == 'cifar10':
-             if ds_config['partition']['type'] == 'dirichlet':
-                 dataset.partition_data(num_clients=num_clients, 
-                                       alpha=ds_config['partition']['alpha'], 
-                                       seed=run_seed)
-             else:
-                  # Add other partitioning methods if needed (e.g., IID)
-                  raise NotImplementedError(f"Partition type '{ds_config['partition']['type']}' not implemented for CIFAR-10.")
-        # elif ds_config['name'].lower() == 'femnist':
-        #      # FEMNIST uses its native partitioning based on users
-        #      dataset.partition_data(num_clients=num_clients) # Adjust as per FEMNIST class implementation
-        else:
-            raise ValueError(f"Partitioning logic not defined for dataset: {ds_config['name']}")
+            raise ValueError(f"Unknown dataset specified in config: {ds_config.get('name')}")
 
-        test_loader = dataset.get_test_dataloader(batch_size=self.config['simulation']['batch_size'] * 2) # Often use larger batch for testing
+        print(f"Setting up dataset: {ds_name}")
+        dataset = dataset_class(data_root=ds_config.get('data_root', './data'))
+        dataset.load_data() # Downloads if necessary
+
+        partition_config = ds_config.get('partition', {})
+        num_clients = partition_config.get('num_clients')
+        if num_clients is None or num_clients <= 0:
+            raise ValueError("Invalid or missing 'num_clients' in dataset partition config.")
+
+        partition_type = partition_config.get('type', '').lower()
+        print(f"Partitioning data for {num_clients} clients using type: '{partition_type}'")
+        if partition_type == 'dirichlet':
+            alpha = partition_config.get('alpha')
+            if alpha is None or alpha <= 0:
+                 raise ValueError("Dirichlet partitioning requires a positive 'alpha' parameter.")
+            dataset.partition_data(num_clients=num_clients, alpha=alpha, seed=run_seed)
+        # Add other partitioning types here if needed (e.g., 'iid', 'native' for FEMNIST)
+        # elif partition_type == 'native' and ds_name == 'femnist':
+        #      dataset.partition_data(num_clients=num_clients) # Adjust as per FEMNIST class
+        else:
+            raise NotImplementedError(f"Partition type '{partition_type}' not implemented or invalid for dataset '{ds_name}'.")
+
+        sim_config = self.config['simulation']
+        test_batch_size = sim_config.get('test_batch_size', sim_config.get('batch_size', 64) * 2)
+        test_loader = dataset.get_test_dataloader(batch_size=test_batch_size)
+        print(f"Test DataLoader created with batch size: {test_batch_size}")
 
         # --- Model Setup ---
         model_config = self.config['model']
-        model_builder = MODEL_MAP.get(model_config['name'].lower())
+        model_name = model_config.get('name', '').lower()
+        model_builder = MODEL_MAP.get(model_name)
         if model_builder is None:
-             raise ValueError(f"Unknown model: {model_config['name']}")
-        # Pass num_classes from dataset to model builder
-        model = model_builder(num_classes=dataset.num_classes)
-        model.to(self.device)
+             raise ValueError(f"Unknown model specified in config: {model_config.get('name')}")
+
+        num_classes = getattr(dataset, 'num_classes', model_config.get('num_classes'))
+        if num_classes is None:
+             raise ValueError("Could not determine 'num_classes' for the model from dataset or config.")
+
+        print(f"Creating model: {model_name} with {num_classes} classes.")
+        # Create model structure on CPU first to avoid potential multiprocessing issues if model is passed directly
+        model_structure = model_builder(num_classes=num_classes)
 
         # --- Client Setup ---
+        print("Setting up clients...")
         clients = []
-        sim_config = self.config['simulation']
+        client_batch_size = sim_config.get('batch_size', 64)
+        local_epochs = sim_config.get('local_epochs', 1)
+        optimizer_config = sim_config.get('optimizer', {})
+        opt_name = optimizer_config.get('name', 'sgd')
+        opt_params = optimizer_config.get('params', {'lr': 0.01})
+
         for i in range(num_clients):
-            client_dataloader = dataset.get_train_dataloader(client_id=i, 
-                                                             batch_size=sim_config['batch_size'])
-            # Need to create a *new* model instance for each client, 
-            # otherwise they share weights unintentionally during simulation.
-            client_model = copy.deepcopy(model) 
-            client = BaseClient(client_id=i,
-                                model=client_model, # Pass model structure
-                                dataloader=client_dataloader,
-                                optimizer_name=sim_config['optimizer']['name'],
-                                optimizer_params=sim_config['optimizer']['params'],
-                                loss_fn=nn.CrossEntropyLoss(), # Or get from config
-                                local_epochs=sim_config['local_epochs'],
-                                device=self.device)
-            clients.append(client)
-            
+            try:
+                client_dataloader = dataset.get_train_dataloader(client_id=i, batch_size=client_batch_size, shuffle=True)
+            except ValueError as e:
+                 print(f"Error getting dataloader for client {i}: {e}. Skipping client.")
+                 continue
+            except Exception as e:
+                 print(f"Unexpected error getting dataloader for client {i}: {e}. Skipping client.")
+                 continue
+
+            # Create a fresh model instance for each client from the structure
+            client_model = copy.deepcopy(model_structure)
+            try:
+                 client = BaseClient(client_id=i,
+                                     model=client_model, # Pass structure, will be moved to device inside client
+                                     dataloader=client_dataloader,
+                                     optimizer_name=opt_name,
+                                     optimizer_params=opt_params,
+                                     loss_fn=nn.CrossEntropyLoss(), # Default, could be configurable
+                                     local_epochs=local_epochs,
+                                     device=self.device) # Pass the target device
+                 clients.append(client)
+            except Exception as e:
+                 print(f"Error creating BaseClient instance for client {i}: {e}. Skipping client.")
+                 traceback.print_exc()
+
+        if not clients:
+             raise RuntimeError("Failed to create any clients. Check dataset partitioning and client setup.")
+        print(f"Successfully created {len(clients)} clients.")
+
         # Assign client speeds if mixed mode delay is used
-        delay_type = sim_config.get('delay_config', {}).get('distribution_type', '')
+        delay_config = sim_config.get('delay_config', {})
+        delay_type = delay_config.get('distribution_type', '')
         if 'mixed' in delay_type:
-            slow_fraction = sim_config.get('delay_config', {}).get('params', {}).get('slow_fraction', 0.2)
-            assign_client_speeds(list(range(num_clients)), slow_fraction=slow_fraction)
+            print("Assigning client speeds for mixed delay mode...")
+            slow_fraction = delay_config.get('params', {}).get('slow_fraction', 0.2)
+            try:
+                 assign_client_speeds([c.client_id for c in clients], slow_fraction=slow_fraction)
+            except Exception as e:
+                 print(f"Error during client speed assignment: {e}")
+                 # Decide how to handle - maybe continue without mixed mode?
 
-
-        return model, clients, test_loader, sim_config
+        # Return model structure on CPU, clients list, test loader, and sim config
+        return model_structure.cpu(), clients, test_loader, sim_config
 
 
     def run_all_experiments(self):
         """ Runs the experiments for all algorithms and repetitions defined in the config. """
-        
-        all_results = {} # Store results per algorithm per run
+
+        all_run_results = {} # Store results {algo_name: [rep1_results, rep2_results, ...]}
 
         for i in range(self.repetitions):
             run_seed = self.base_seed + i
-            print(f"\n===== Starting Repetition {i+1}/{self.repetitions} (Seed: {run_seed}) =====")
-            
-            # Setup dataset, initial model, clients for this repetition
-            initial_model_structure, clients, test_loader, sim_config = self._setup_single_run(run_seed)
-            
-            for algo_config in self.config['algorithms']:
+            print(f"\n{'='*20} Starting Repetition {i+1}/{self.repetitions} (Seed: {run_seed}) {'='*20}")
+
+            try:
+                # Setup dataset, initial model structure (CPU), clients list, test loader
+                initial_model_structure_cpu, clients, test_loader, sim_config = self._setup_single_run(run_seed)
+            except Exception as e:
+                print(f"\n!!!!!! Error during setup for Repetition {i+1} (Seed: {run_seed}) !!!!!!")
+                print(f"Error: {e}")
+                traceback.print_exc()
+                print("!!!!!! Skipping this repetition !!!!!!")
+                continue # Skip to the next repetition
+
+
+            # --- Loop through each algorithm configuration ---
+            for algo_config in self.config.get('algorithms', []):
+                if not isinstance(algo_config, dict) or 'name' not in algo_config:
+                     print(f"Warning: Invalid algorithm configuration format found: {algo_config}. Skipping.")
+                     continue
+
                 algo_name = algo_config['name']
-                algo_params = algo_config['params']
+                algo_params = algo_config.get('params', {}) # Use .get for safety
                 print(f"\n----- Running Algorithm: {algo_name} -----")
-                
-                # Get the correct server class
+
                 server_class = ALGORITHM_MAP.get(algo_name.lower())
                 if server_class is None:
-                    print(f"Warning: Unknown algorithm '{algo_name}'. Skipping.")
+                    print(f"Warning: Unknown algorithm '{algo_name}' defined in config. Skipping.")
                     continue
-                    
-                # Create a fresh copy of the initial model for each algorithm run
-                current_run_model = copy.deepcopy(initial_model_structure)
-                current_run_model.to(self.device)
-                
+
+                # Create a fresh model instance for this algorithm run and move to device
+                current_run_model = copy.deepcopy(initial_model_structure_cpu).to(self.device)
+
                 # Combine general simulation config with algorithm-specific params
-                current_config = {**sim_config, **algo_params, 
-                                  'max_server_iterations': sim_config.get('max_server_iterations'),
-                                  'max_applied_updates': sim_config.get('max_applied_updates'),
-                                  'max_wall_time_seconds': sim_config.get('max_wall_time_seconds'),
-                                  'eval_interval': sim_config.get('eval_interval')}
+                # Pass num_clients explicitly if server needs it (some might infer from client list)
+                current_config = {
+                    **sim_config,
+                    **algo_params,
+                    'num_clients': len(clients),
+                    # Explicitly pass potentially overridden top-level sim parameters
+                    'max_server_iterations': sim_config.get('max_server_iterations'),
+                    'max_applied_updates': sim_config.get('max_applied_updates'),
+                    'max_wall_time_seconds': sim_config.get('max_wall_time_seconds'),
+                    'eval_interval': sim_config.get('eval_interval')
+                 }
 
 
-                # Instantiate the server
-                server = server_class(model=current_run_model, 
-                                      clients=clients,         # Clients are reset by server before training
-                                      test_loader=test_loader,
-                                      config=current_config,
-                                      device=self.device)
+                # --- Configure Clients for the Current Algorithm ---
+                required_type = 'weights' # Default assumption
+                algo_name_lower = algo_name.lower()
 
-                # Run the simulation
-                results = server.run() # Server's run method handles the loop and logging
+                try:
+                    if algo_name_lower == 'fedavg':
+                        required_type = 'weights'
+                    elif algo_name_lower in ['fedbuff', 'ca2fl', 'vanilla_asgd', 'delay_adaptive_afl']:
+                        required_type = 'weights' # These servers currently calculate delta internally
+                    elif algo_name_lower in ['malenia_sgd', 'stalesgd_bda', 'stalesgd_conceptual']:
+                        # StaleSGD Conceptual Option A implementation also needs 'gradient'
+                        required_type = 'gradient'
+                    else:
+                        print(f"Warning: Unknown algorithm '{algo_name}'. Defaulting client return_type to '{required_type}'.")
 
-                # Store results
-                if algo_name not in all_results:
-                    all_results[algo_name] = []
-                all_results[algo_name].append(results)
-                
-                # Save results for this run
-                results_filename = f"{algo_name}_seed{run_seed}_results.pt"
-                results_path = os.path.join(self.experiment_run_dir, results_filename)
-                torch.save(results, results_path)
-                print(f"Results saved to {results_path}")
-
-        print("\n===== All Experiment Repetitions Finished =====")
-        return all_results
+                    print(f"Configuring {len(clients)} clients for '{algo_name}' with return_type='{required_type}'...")
+                    for client in clients:
+                        if isinstance(client, BaseClient):
+                            client.set_return_type(required_type)
+                        else:
+                            # This case should ideally not happen if setup is correct
+                            print(f"Warning: Item in client list is not a BaseClient instance.")
+                except Exception as e:
+                     print(f"!!! Error configuring clients for {algo_name}: {e}. Skipping algorithm.")
+                     traceback.print_exc()
+                     continue # Skip to the next algorithm
 
 
-# Example usage (called from main.py)
+                # --- Instantiate and Run the Server ---
+                server = None # Initialize server variable
+                try:
+                    # Instantiate the server with the configured clients
+                    server = server_class(model=current_run_model,
+                                          clients=clients,
+                                          test_loader=test_loader,
+                                          config=current_config,
+                                          device=self.device)
+                except Exception as e:
+                     print(f"!!! Error instantiating server for {algo_name}: {e}")
+                     traceback.print_exc()
+                     continue # Skip to next algorithm
+
+                try:
+                    # Run the simulation
+                    print(f"Starting server run for {algo_name}...")
+                    results = server.run() # Server's run method handles the simulation loop
+                    print(f"Finished server run for {algo_name}.")
+                except Exception as e:
+                    print(f"!!! Error during server run for {algo_name}: {e}")
+                    traceback.print_exc()
+                    results = None # Indicate failure
+
+                # --- Store and Save Results ---
+                if results is not None and isinstance(results, dict):
+                    # Initialize list for this algorithm if it's the first repetition result
+                    if algo_name not in all_run_results:
+                        all_run_results[algo_name] = []
+                    all_run_results[algo_name].append(results) # Append result dict for this repetition
+
+                    # Save results for this specific algorithm and seed immediately
+                    results_filename = f"{algo_name}_seed{run_seed}_results.pt"
+                    results_path = os.path.join(self.experiment_run_dir, results_filename)
+                    try:
+                        torch.save(results, results_path)
+                        print(f"Results for {algo_name} (Seed {run_seed}) saved to {results_path}")
+                    except Exception as e:
+                         print(f"!!! Error saving results to {results_path}: {e}")
+                else:
+                     print(f"Skipping result storage for {algo_name} due to run error or invalid result format.")
+
+
+            # --- End of loop for algorithms ---
+        # --- End of loop for repetitions ---
+
+        print(f"\n{'='*20} All Experiment Repetitions Finished {'='*20}")
+
+        # --- Final Save (Optional: Save combined results) ---
+        # You might want to save the `all_run_results` dictionary which aggregates
+        # results across all repetitions for easier loading later.
+        combined_results_path = os.path.join(self.experiment_run_dir, "all_repetitions_results.pt")
+        try:
+             torch.save(all_run_results, combined_results_path)
+             print(f"Combined results across all repetitions saved to: {combined_results_path}")
+        except Exception as e:
+             print(f"!!! Error saving combined results: {e}")
+
+
+        return all_run_results
+
+# --- Example usage (typically called from main.py) ---
 # if __name__ == '__main__':
 #     config_file = 'config.yaml' # Or get from argparse
-#     manager = ExperimentManager(config_path=config_file)
-#     final_results = manager.run_all_experiments()
-#     # Post-processing or plotting could happen here
-#     print("\nExperiment manager finished.")
+#     try:
+#         manager = ExperimentManager(config_path=config_file)
+#         final_results = manager.run_all_experiments()
+#         # Optional: Post-processing or plotting could happen here
+#         # from utils.plotting import plot_all_results
+#         # plot_all_results(manager.experiment_run_dir)
+#         print("\nExperiment manager finished successfully.")
+#     except (FileNotFoundError, ValueError, NotImplementedError, RuntimeError, Exception) as e:
+#          print(f"\n!!!!!!!! An error occurred in Experiment Manager !!!!!!!!")
+#          print(f"Error Type: {type(e).__name__}")
+#          print(f"Error Message: {e}")
+#          traceback.print_exc()
+#          print("!!!!!!!! Experiment Manager failed !!!!!!!!")
