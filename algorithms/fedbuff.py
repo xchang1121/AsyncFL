@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from typing import List, Dict, Any, Optional, Tuple
 import time
 import copy
+import random
 import heapq # For event queue simulation
 
 # Assuming BaseServer is in server.base_server and BaseClient in clients.base_client
@@ -91,7 +92,8 @@ class FedBuffServer(BaseServer):
         
         # Average the aggregated delta
         for name in aggregated_delta:
-            aggregated_delta[name] /= num_updates_in_buffer
+            aggregated_delta[name] = aggregated_delta[name].float() / num_updates_in_buffer
+
 
         # Apply the aggregated delta to the current model weights
         current_weights = kwargs.get('current_weights', self.get_model_weights())
@@ -115,7 +117,7 @@ class FedBuffServer(BaseServer):
         
         if num_updates_in_buffer > 0:
             for name in averaged_delta:
-                averaged_delta[name] /= num_updates_in_buffer
+                averaged_delta[name] = averaged_delta[name].float() / num_updates_in_buffer
                 
         return averaged_delta # Return the averaged delta
 

@@ -2,3 +2,6 @@
 data/*
 venv/*
 results/*
+generated_configs/*
+logs/*
+__pycache__/

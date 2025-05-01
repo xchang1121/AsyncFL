@@ -51,7 +51,7 @@ stalesgd_afl_comparison/
 ├── utils/                    # Utility functions
 │   ├── __init__.py
 │   ├── simulation.py         # Delay simulation functions
-│   ├── logging.py            # Placeholder for logging utilities
+│   ├── logger.py            # Placeholder for logging utilities
 │   └── plotting.py           # Placeholder for plotting utilities
 └── requirements.txt          # Python package requirements
 ```

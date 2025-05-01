@@ -163,7 +163,7 @@ class CA2FLServer(BaseServer):
                     for name in avg_calibrated_delta:
                         avg_calibrated_delta[name] += cal_delta[name].to(self.device)
                 for name in avg_calibrated_delta:
-                     avg_calibrated_delta[name] /= num_in_buffer
+                    avg_calibrated_delta[name] = avg_calibrated_delta[name].float() / num_in_buffer
                      
                 # Calculate server update vt = ht + avg_calibrated_delta (implicitly Alg 2 line 10, 11, 12)
                 server_update_v = {name: self.global_cache_h[name].to(self.device) + avg_calibrated_delta[name]

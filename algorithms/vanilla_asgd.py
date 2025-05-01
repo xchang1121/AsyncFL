@@ -194,4 +194,4 @@ class VanillaASGDServer(BaseServer):
          self.results['train_loss'].append(avg_train_loss if avg_train_loss is not None else \
                                            (self.results['train_loss'][-1] if self.results['train_loss'] else None))
 
-         print(f"Update: {self.applied_update_counter:<5} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Last Train Loss: {avg_train_loss if avg_train_loss is not None else 'N/A':7.4f}")
+         print(f"Update: {self.applied_update_counter:<5} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Last Train Loss: {f'{avg_train_loss:7.4f}' if avg_train_loss is not None else 'N/A'}")

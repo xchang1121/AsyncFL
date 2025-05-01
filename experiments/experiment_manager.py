@@ -105,7 +105,15 @@ class ExperimentManager:
         self.results_base_dir = self.config.get('results_dir', './results')
         self.experiment_name = self.config.get('experiment_name', 'fl_experiment')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.experiment_run_dir = os.path.join(self.results_base_dir, f"{self.experiment_name}_{timestamp}")
+        # Extract algorithm name if exactly one algorithm is listed
+        algorithms = self.config.get('algorithms', [])
+        if isinstance(algorithms, list) and len(algorithms) == 1:
+            algo_name = algorithms[0].get('name', 'unknown_algo')
+            run_name = f"{self.experiment_name}_{algo_name}_{timestamp}"
+        else:
+            run_name = f"{self.experiment_name}_{timestamp}"
+
+        self.experiment_run_dir = os.path.join(self.results_base_dir, run_name)
         try:
             os.makedirs(self.experiment_run_dir, exist_ok=True)
             print(f"Results will be saved in: {self.experiment_run_dir}")

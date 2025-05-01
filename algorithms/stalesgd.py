@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Optional, Tuple
 import time
 import copy
 import heapq # For event queue simulation
-import random
 
 # Assuming BaseServer is in server.base_server and BaseClient in clients.base_client
 from server.base_server import BaseServer
@@ -94,7 +93,10 @@ class StaleSGDServer(BaseServer):
             
             # Get initial gradient and cache it (simulates initial computation)
             # Assume client returns: gradient, loss, samples
+            print(f"Start Gradient Client {client_id}")
+
             gradient, _, _ = self.clients[client_id].train() # Mock: Call train, assume it returns gradient
+            print(f"Start Gradient Client {client_id}")
             if self.client_gradient_caches[client_id] is None:
                  # Initialize cache structure if first time
                  self.client_gradient_caches[client_id] = {k: torch.zeros_like(v) for k, v in gradient.items()}
@@ -105,7 +107,9 @@ class StaleSGDServer(BaseServer):
             delay = simulate_delay(client_id, **self.delay_config)
             completion_time = self.current_wall_time + delay
             heapq.heappush(self.client_completion_events, (completion_time, client_id, 0)) 
-
+            
+            print(f"Here Client {client_id}")
+        print("Here 1")
         # Initial evaluation (after initial gradients are conceptually computed/cached)
         if self.eval_interval > 0:
              self.log_results(avg_train_loss=None) # Log state at t=0
@@ -179,7 +183,7 @@ class StaleSGDServer(BaseServer):
 
                     # Average the gradient over the active set
                     for name in aggregated_gradient_bda:
-                        aggregated_gradient_bda[name] /= n_t
+                        aggregated_gradient_bda[name] = aggregated_gradient_bda[name].float()/float(n_t)
 
                     # Update Global Model: w^{t+1} = w^t - eta_g * u_BDA^t (Alg 2, line 7)
                     current_weights = self.get_model_weights()
