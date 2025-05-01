@@ -5,6 +5,8 @@ CONFIG_ORIG="config.yaml"
 CONFIG_DIR="generated_configs"
 MAIN_SCRIPT="main.py"
 
+# Clear the generated_configs folder before starting
+rm -rf "$CONFIG_DIR"
 # Create output dir for generated config files
 mkdir -p "$CONFIG_DIR"
 
@@ -47,7 +49,9 @@ for config_file in "$CONFIG_DIR"/*.yaml; do
     log_file="logs/${timestamp}_${algo_name}.log"
     echo "Launching: $algo_name → $log_file"
     mkdir -p logs
-    python "$MAIN_SCRIPT" --config "$config_file" > "$log_file" 2>&1 &
+    PYTHONUNBUFFERED=1 python "$MAIN_SCRIPT" --config "$config_file" > "$log_file" 2>&1 &
+    # # Output the command instead of running it
+    # echo "PYTHONUNBUFFERED=1 python $MAIN_SCRIPT --config $config_file > $log_file 2>&1 &"
 done
 
 

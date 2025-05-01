@@ -1,7 +1,6 @@
 # experiments/experiment_manager.py
 
-import torch
-import torch.nn as nn
+
 import yaml
 import os
 import copy
@@ -10,6 +9,10 @@ import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Type, Tuple
 import traceback # For better error printing
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
 
 # --- Import necessary components ---
 
@@ -106,7 +109,15 @@ class ExperimentManager:
         self.results_base_dir = self.config.get('results_dir', './results')
         self.experiment_name = self.config.get('experiment_name', 'fl_experiment')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.experiment_run_dir = os.path.join(self.results_base_dir, f"{self.experiment_name}_{timestamp}")
+        # Extract algorithm name if exactly one algorithm is listed
+        algorithms = self.config.get('algorithms', [])
+        if isinstance(algorithms, list) and len(algorithms) == 1:
+            algo_name = algorithms[0].get('name', 'unknown_algo')
+            run_name = f"{timestamp}_{self.experiment_name}_{algo_name}"
+        else:
+            run_name = f"{timestamp}_{self.experiment_name}"
+
+        self.experiment_run_dir = os.path.join(self.results_base_dir, run_name)
         try:
             os.makedirs(self.experiment_run_dir, exist_ok=True)
             print(f"Results will be saved in: {self.experiment_run_dir}")

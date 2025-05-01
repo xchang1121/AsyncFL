@@ -93,10 +93,8 @@ class StaleSGDServer(BaseServer):
             
             # Get initial gradient and cache it (simulates initial computation)
             # Assume client returns: gradient, loss, samples
-            print(f"Start Gradient Client {client_id}")
-
             gradient, _, _ = self.clients[client_id].train() # Mock: Call train, assume it returns gradient
-            print(f"Start Gradient Client {client_id}")
+
             if self.client_gradient_caches[client_id] is None:
                  # Initialize cache structure if first time
                  self.client_gradient_caches[client_id] = {k: torch.zeros_like(v) for k, v in gradient.items()}
@@ -108,8 +106,6 @@ class StaleSGDServer(BaseServer):
             completion_time = self.current_wall_time + delay
             heapq.heappush(self.client_completion_events, (completion_time, client_id, 0)) 
             
-            print(f"Here Client {client_id}")
-        print("Here 1")
         # Initial evaluation (after initial gradients are conceptually computed/cached)
         if self.eval_interval > 0:
              self.log_results(avg_train_loss=None) # Log state at t=0
