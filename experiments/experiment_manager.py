@@ -26,6 +26,7 @@ from algorithms.vanilla_asgd import VanillaASGDServer
 from algorithms.delay_adaptive import DelayAdaptiveAFLServer
 from algorithms.malenia_sgd import MaleniaSGDServer
 from algorithms.stalesgd import StaleSGDServer
+from algorithms.stalesgd_conceptual import StaleSGDConceptualServer
 
 # Import utilities
 from utils.simulation import assign_client_speeds
@@ -39,6 +40,7 @@ ALGORITHM_MAP: Dict[str, Type[BaseServer]] = {
     "delay_adaptive_afl": DelayAdaptiveAFLServer,
     "malenia_sgd": MaleniaSGDServer,
     "stalesgd_bda": StaleSGDServer,
+    "stalesgd_conceptual": StaleSGDConceptualServer
 }
 
 # Map dataset names from config to Dataset classes
