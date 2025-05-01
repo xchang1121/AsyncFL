@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 import yaml
 import os
 import copy
@@ -12,7 +11,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Type, Tuple
 import traceback # For better error printing
 
-# Import necessary components from other modules
+# --- Import necessary components ---
+
 # Dataset Imports
 from datasets.cifar10 import CIFAR10Dataset
 # from datasets.femnist import FEMNISTDataset # Add when implemented
@@ -22,7 +22,7 @@ from datasets.base_dataset import BaseDataset # Useful for type hinting
 from models.resnet import ResNet18_CIFAR
 from models.cnn import CNN_CIFAR
 
-# Client Import (Use the modified version)
+# Client Import (Use the modified version that supports all return types)
 from clients.base_client import BaseClient
 
 # Server Imports
@@ -34,10 +34,10 @@ from algorithms.vanilla_asgd import VanillaASGDServer
 from algorithms.delay_adaptive import DelayAdaptiveAFLServer
 from algorithms.malenia_sgd import MaleniaSGDServer
 from algorithms.stalesgd import StaleSGDServer # BDA Variant
-# Import the specific conceptual server (Option A implementation)
-from algorithms.stalesgd_conceptual import StaleSGDConceptualServer # Assuming this is the Option A code
+# Import the new conceptual server
+from algorithms.stalesgd_conceptual import StaleSGDConceptualServer
 
-# Import utilities
+# Utility Imports
 from utils.simulation import assign_client_speeds # Only needed if using mixed delays
 
 # --- Mappings ---
@@ -52,7 +52,7 @@ ALGORITHM_MAP: Dict[str, Type[BaseServer]] = {
     "delay_adaptive_afl": DelayAdaptiveAFLServer,
     "malenia_sgd": MaleniaSGDServer,
     "stalesgd_bda": StaleSGDServer, # The practical BDA variant
-    "stalesgd_conceptual": StaleSGDConceptualServer, # The conceptual Option A variant
+    "stalesgd_conceptual": StaleSGDConceptualServer, # The conceptual variant (handles A/B internally)
 }
 
 # Map dataset names from config to Dataset classes
@@ -106,15 +106,7 @@ class ExperimentManager:
         self.results_base_dir = self.config.get('results_dir', './results')
         self.experiment_name = self.config.get('experiment_name', 'fl_experiment')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Extract algorithm name if exactly one algorithm is listed
-        algorithms = self.config.get('algorithms', [])
-        if isinstance(algorithms, list) and len(algorithms) == 1:
-            algo_name = algorithms[0].get('name', 'unknown_algo')
-            run_name = f"{self.experiment_name}_{algo_name}_{timestamp}"
-        else:
-            run_name = f"{self.experiment_name}_{timestamp}"
-
-        self.experiment_run_dir = os.path.join(self.results_base_dir, run_name)
+        self.experiment_run_dir = os.path.join(self.results_base_dir, f"{self.experiment_name}_{timestamp}")
         try:
             os.makedirs(self.experiment_run_dir, exist_ok=True)
             print(f"Results will be saved in: {self.experiment_run_dir}")
@@ -134,7 +126,13 @@ class ExperimentManager:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
         if str(self.device) == "cuda":
-            print(f"CUDA Device Name: {torch.cuda.get_device_name(0)}")
+             if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                  try:
+                    print(f"CUDA Device Name: {torch.cuda.get_device_name(0)}")
+                  except Exception as e:
+                       print(f"Could not get CUDA device name: {e}")
+             else:
+                  print("CUDA selected, but no CUDA devices found by PyTorch.")
 
 
     def _set_seed(self, seed):
@@ -145,9 +143,6 @@ class ExperimentManager:
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-            # Optional: Configure cuDNN for determinism (can impact performance)
-            # torch.backends.cudnn.deterministic = True
-            # torch.backends.cudnn.benchmark = False
         print(f"Set seed for reproducibility: {seed}")
 
 
@@ -178,9 +173,7 @@ class ExperimentManager:
             if alpha is None or alpha <= 0:
                  raise ValueError("Dirichlet partitioning requires a positive 'alpha' parameter.")
             dataset.partition_data(num_clients=num_clients, alpha=alpha, seed=run_seed)
-        # Add other partitioning types here if needed (e.g., 'iid', 'native' for FEMNIST)
-        # elif partition_type == 'native' and ds_name == 'femnist':
-        #      dataset.partition_data(num_clients=num_clients) # Adjust as per FEMNIST class
+        # Add other partitioning types here if needed
         else:
             raise NotImplementedError(f"Partition type '{partition_type}' not implemented or invalid for dataset '{ds_name}'.")
 
@@ -201,7 +194,7 @@ class ExperimentManager:
              raise ValueError("Could not determine 'num_classes' for the model from dataset or config.")
 
         print(f"Creating model: {model_name} with {num_classes} classes.")
-        # Create model structure on CPU first to avoid potential multiprocessing issues if model is passed directly
+        # Create model structure on CPU first
         model_structure = model_builder(num_classes=num_classes)
 
         # --- Client Setup ---
@@ -213,8 +206,13 @@ class ExperimentManager:
         opt_name = optimizer_config.get('name', 'sgd')
         opt_params = optimizer_config.get('params', {'lr': 0.01})
 
+        # Ensure BaseClient uses the modified version by checking for set_return_type
+        if not hasattr(BaseClient(0, model_structure, DataLoader([]), device=torch.device('cpu')), 'set_return_type'):
+             raise RuntimeError("The BaseClient class being used is outdated. Please ensure clients/base_client.py has been updated.")
+
         for i in range(num_clients):
             try:
+                # Use shuffle=True for training data by default
                 client_dataloader = dataset.get_train_dataloader(client_id=i, batch_size=client_batch_size, shuffle=True)
             except ValueError as e:
                  print(f"Error getting dataloader for client {i}: {e}. Skipping client.")
@@ -226,14 +224,16 @@ class ExperimentManager:
             # Create a fresh model instance for each client from the structure
             client_model = copy.deepcopy(model_structure)
             try:
+                 # Initialize with a default return_type; it will be set correctly later per algorithm
                  client = BaseClient(client_id=i,
-                                     model=client_model, # Pass structure, will be moved to device inside client
+                                     model=client_model,
                                      dataloader=client_dataloader,
                                      optimizer_name=opt_name,
                                      optimizer_params=opt_params,
-                                     loss_fn=nn.CrossEntropyLoss(), # Default, could be configurable
+                                     loss_fn=nn.CrossEntropyLoss(),
                                      local_epochs=local_epochs,
-                                     device=self.device) # Pass the target device
+                                     device=self.device, # Pass the target device
+                                     return_type='weights') # Default init type
                  clients.append(client)
             except Exception as e:
                  print(f"Error creating BaseClient instance for client {i}: {e}. Skipping client.")
@@ -249,11 +249,13 @@ class ExperimentManager:
         if 'mixed' in delay_type:
             print("Assigning client speeds for mixed delay mode...")
             slow_fraction = delay_config.get('params', {}).get('slow_fraction', 0.2)
+            if not 0 <= slow_fraction <= 1:
+                 print(f"Warning: Invalid slow_fraction ({slow_fraction}). Using default 0.2.")
+                 slow_fraction = 0.2
             try:
                  assign_client_speeds([c.client_id for c in clients], slow_fraction=slow_fraction)
             except Exception as e:
                  print(f"Error during client speed assignment: {e}")
-                 # Decide how to handle - maybe continue without mixed mode?
 
         # Return model structure on CPU, clients list, test loader, and sim config
         return model_structure.cpu(), clients, test_loader, sim_config
@@ -266,7 +268,7 @@ class ExperimentManager:
 
         for i in range(self.repetitions):
             run_seed = self.base_seed + i
-            print(f"\n{'='*20} Starting Repetition {i+1}/{self.repetitions} (Seed: {run_seed}) {'='*20}")
+            print(f"\n{'='*25} Starting Repetition {i+1}/{self.repetitions} (Seed: {run_seed}) {'='*25}")
 
             try:
                 # Setup dataset, initial model structure (CPU), clients list, test loader
@@ -286,7 +288,7 @@ class ExperimentManager:
                      continue
 
                 algo_name = algo_config['name']
-                algo_params = algo_config.get('params', {}) # Use .get for safety
+                algo_params = algo_config.get('params', {})
                 print(f"\n----- Running Algorithm: {algo_name} -----")
 
                 server_class = ALGORITHM_MAP.get(algo_name.lower())
@@ -298,12 +300,10 @@ class ExperimentManager:
                 current_run_model = copy.deepcopy(initial_model_structure_cpu).to(self.device)
 
                 # Combine general simulation config with algorithm-specific params
-                # Pass num_clients explicitly if server needs it (some might infer from client list)
                 current_config = {
                     **sim_config,
                     **algo_params,
                     'num_clients': len(clients),
-                    # Explicitly pass potentially overridden top-level sim parameters
                     'max_server_iterations': sim_config.get('max_server_iterations'),
                     'max_applied_updates': sim_config.get('max_applied_updates'),
                     'max_wall_time_seconds': sim_config.get('max_wall_time_seconds'),
@@ -321,18 +321,24 @@ class ExperimentManager:
                     elif algo_name_lower in ['fedbuff', 'ca2fl', 'vanilla_asgd', 'delay_adaptive_afl']:
                         required_type = 'weights' # These servers currently calculate delta internally
                     elif algo_name_lower in ['malenia_sgd', 'stalesgd_bda', 'stalesgd_conceptual']:
-                        # StaleSGD Conceptual Option A implementation also needs 'gradient'
-                        required_type = 'gradient'
+                        # StaleSGD Conceptual (Option A/B handled internally) needs gradient or delta
+                        # The StaleSGDConceptualServer class itself checks the 'conceptual_stalegsgd_option'
+                        # param and sets the appropriate internal _client_return_type.
+                        # Here, we need to determine the type needed *by the server* for its initial setup
+                        # and potentially subsequent steps. Let's base it on the config if possible.
+                        if algo_name_lower == 'stalesgd_conceptual':
+                            option = current_config.get('conceptual_stalegsgd_option', 'A').upper()
+                            required_type = 'gradient_delta' if option == 'B' else 'gradient'
+                        else: # malenia_sgd, stalesgd_bda need gradient
+                            required_type = 'gradient'
                     else:
                         print(f"Warning: Unknown algorithm '{algo_name}'. Defaulting client return_type to '{required_type}'.")
 
                     print(f"Configuring {len(clients)} clients for '{algo_name}' with return_type='{required_type}'...")
                     for client in clients:
                         if isinstance(client, BaseClient):
-                            client.set_return_type(required_type)
-                        else:
-                            # This case should ideally not happen if setup is correct
-                            print(f"Warning: Item in client list is not a BaseClient instance.")
+                            client.set_return_type(required_type) # Use the setter
+                        # else: Handled during setup
                 except Exception as e:
                      print(f"!!! Error configuring clients for {algo_name}: {e}. Skipping algorithm.")
                      traceback.print_exc()
@@ -340,9 +346,8 @@ class ExperimentManager:
 
 
                 # --- Instantiate and Run the Server ---
-                server = None # Initialize server variable
+                server = None
                 try:
-                    # Instantiate the server with the configured clients
                     server = server_class(model=current_run_model,
                                           clients=clients,
                                           test_loader=test_loader,
@@ -354,23 +359,20 @@ class ExperimentManager:
                      continue # Skip to next algorithm
 
                 try:
-                    # Run the simulation
                     print(f"Starting server run for {algo_name}...")
-                    results = server.run() # Server's run method handles the simulation loop
+                    results = server.run()
                     print(f"Finished server run for {algo_name}.")
                 except Exception as e:
                     print(f"!!! Error during server run for {algo_name}: {e}")
                     traceback.print_exc()
-                    results = None # Indicate failure
+                    results = None
 
                 # --- Store and Save Results ---
                 if results is not None and isinstance(results, dict):
-                    # Initialize list for this algorithm if it's the first repetition result
                     if algo_name not in all_run_results:
                         all_run_results[algo_name] = []
-                    all_run_results[algo_name].append(results) # Append result dict for this repetition
+                    all_run_results[algo_name].append(results)
 
-                    # Save results for this specific algorithm and seed immediately
                     results_filename = f"{algo_name}_seed{run_seed}_results.pt"
                     results_path = os.path.join(self.experiment_run_dir, results_filename)
                     try:
@@ -385,11 +387,9 @@ class ExperimentManager:
             # --- End of loop for algorithms ---
         # --- End of loop for repetitions ---
 
-        print(f"\n{'='*20} All Experiment Repetitions Finished {'='*20}")
+        print(f"\n{'='*25} All Experiment Repetitions Finished {'='*25}")
 
-        # --- Final Save (Optional: Save combined results) ---
-        # You might want to save the `all_run_results` dictionary which aggregates
-        # results across all repetitions for easier loading later.
+        # --- Final Save (Combined results across repetitions) ---
         combined_results_path = os.path.join(self.experiment_run_dir, "all_repetitions_results.pt")
         try:
              torch.save(all_run_results, combined_results_path)
@@ -399,20 +399,3 @@ class ExperimentManager:
 
 
         return all_run_results
-
-# --- Example usage (typically called from main.py) ---
-# if __name__ == '__main__':
-#     config_file = 'config.yaml' # Or get from argparse
-#     try:
-#         manager = ExperimentManager(config_path=config_file)
-#         final_results = manager.run_all_experiments()
-#         # Optional: Post-processing or plotting could happen here
-#         # from utils.plotting import plot_all_results
-#         # plot_all_results(manager.experiment_run_dir)
-#         print("\nExperiment manager finished successfully.")
-#     except (FileNotFoundError, ValueError, NotImplementedError, RuntimeError, Exception) as e:
-#          print(f"\n!!!!!!!! An error occurred in Experiment Manager !!!!!!!!")
-#          print(f"Error Type: {type(e).__name__}")
-#          print(f"Error Message: {e}")
-#          traceback.print_exc()
-#          print("!!!!!!!! Experiment Manager failed !!!!!!!!")
