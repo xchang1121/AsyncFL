@@ -72,7 +72,7 @@ class CA2FLServer(BaseServer):
         self.idle_clients = list(range(len(clients))) # IDs of clients available
         random.shuffle(self.idle_clients)
         self.current_wall_time = 0.0
-        self.server_update_counter = 0 # Counter for server steps based on buffer flushes
+        self.current_server_iteration = 0 # Counter for server steps based on buffer flushes
         self.client_model_versions: Dict[int, int] = {}
 
 
@@ -108,7 +108,7 @@ class CA2FLServer(BaseServer):
             self.client_model_versions[client_id] = 0
 
         # Main simulation loop (event-driven)
-        while self.server_update_counter < self.max_server_iterations:
+        while self.current_server_iteration < self.max_server_iterations:
             if not self.client_completion_events:
                 print("Warning: No more client events. Stopping simulation.")
                 break
@@ -122,10 +122,12 @@ class CA2FLServer(BaseServer):
             # Client completed training
             self.active_clients.remove(client_id)
             
+            # Get the weights the client started with (approximate for simulation)
+            initial_weights_client = copy.deepcopy(self.clients[client_id].model.state_dict())
+            
             # Get update (assuming client returns delta: w_new - w_old)
             client_model_trained, loss, samples = self.clients[client_id].train() # Assume train returns new weights
-            # Get the weights the client started with (approximate for simulation)
-            initial_weights_client = self.clients[client_id].model.state_dict() 
+
             update_delta = {name: client_model_trained[name].cpu() - initial_weights_client[name].cpu() 
                             for name in client_model_trained} # Delta_t^i
 
@@ -152,7 +154,7 @@ class CA2FLServer(BaseServer):
 
             # Trigger server update if buffer is full
             if len(self.calibrated_update_buffer) >= self.buffer_size_k:
-                print(f"  Buffer full. Performing server update {self.server_update_counter + 1}...")
+                print(f"  Buffer full. Performing server update {self.current_server_iteration + 1}...")
                 
                 # --- CA2FL Aggregation (Algorithm 2, line 10, 11) ---
                 # Calculate average calibrated delta from buffer
@@ -174,7 +176,7 @@ class CA2FLServer(BaseServer):
                 current_weights = self.get_model_weights()
                 with torch.no_grad():
                      new_weights = {name: current_weights[name] + self.server_lr * server_update_v[name] 
-                                   for name in current_weights}
+                                   for name in current_weights} # self.server_lr
                 self.set_model_weights(new_weights)
                 
                 # --- Update Global Cache h (Algorithm 2, line 13, 14) ---
@@ -192,35 +194,32 @@ class CA2FLServer(BaseServer):
                 # --- End Update Global Cache ---
 
 
-                self.server_update_counter += 1
+                self.current_server_iteration += 1
                 self.calibrated_update_buffer = [] # Clear buffer
                 self.clients_in_buffer = set() # Reset clients contributing to buffer
 
 
-                print(f"  Server model updated. Iteration: {self.server_update_counter}")
+                print(f"  Server model updated. Iteration: {self.current_server_iteration}")
                 
                 # Evaluate and Log periodically based on server updates
-                if self.server_update_counter % self.eval_interval == 0 or self.server_update_counter == self.max_server_iterations:
+                if self.current_server_iteration % self.eval_interval == 0 or self.current_server_iteration == self.max_server_iterations:
                      self.log_results(avg_train_loss=loss) # Using last client's loss as proxy for now
 
-
-            # Assign new work to an idle client if available (same as FedBuff)
-            if self.idle_clients:
-                new_client_id = self.idle_clients.pop(0)
-                self.active_clients.add(new_client_id)
-                current_server_weights = self.get_model_weights()
-                self.clients[new_client_id].set_model_weights(copy.deepcopy(current_server_weights))
-                
-                delay = simulate_delay(new_client_id, **self.delay_config)
-                completion_time = self.current_wall_time + delay
-                
-                current_model_ver = self.server_update_counter 
-                heapq.heappush(self.client_completion_events, (completion_time, new_client_id, current_model_ver))
-                self.client_model_versions[new_client_id] = current_model_ver
-                print(f"  Assigned Client {new_client_id} with model ver {current_model_ver}. Est completion: {completion_time:.2f}s")
-
-            else:
+            if not self.idle_clients:
                 self.idle_clients.append(client_id)
+                
+            # Assign new work to an idle client if available (same as FedBuff)
+            new_client_id = self.idle_clients.pop(0)
+            self.active_clients.add(new_client_id)
+            self.clients[new_client_id].set_model_weights(copy.deepcopy(self.get_model_weights()))
+            
+            delay = simulate_delay(new_client_id, **self.delay_config)
+            completion_time = self.current_wall_time + delay
+            
+            current_model_ver = self.current_server_iteration 
+            heapq.heappush(self.client_completion_events, (completion_time, new_client_id, current_model_ver))
+            self.client_model_versions[new_client_id] = current_model_ver
+            print(f"  Assigned Client {new_client_id} with model ver {current_model_ver}. Est completion: {completion_time:.2f}s")
 
 
             # Optional: Check for wall clock time limit
@@ -230,9 +229,9 @@ class CA2FLServer(BaseServer):
                  break
                  
         print("\nCA2FL simulation finished.")
-        if self.server_update_counter < self.max_server_iterations:
-             print(f"Stopped early at server iteration {self.server_update_counter}")
-             if not self.results['server_iteration'] or self.results['server_iteration'][-1] != self.server_update_counter:
+        if self.current_server_iteration < self.max_server_iterations:
+             print(f"Stopped early at server iteration {self.current_server_iteration}")
+             if not self.results['server_iteration'] or self.results['server_iteration'][-1] != self.current_server_iteration:
                   self.log_results(avg_train_loss=None)
 
         return self.results
