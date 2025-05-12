@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from typing import Dict, Any, Tuple, Optional, List, Literal, Union
 import copy
 import os # Added for cpu_count fallback
+import traceback # For better error printing
 import numpy as np # For nan loss handling
 
 class BaseClient:

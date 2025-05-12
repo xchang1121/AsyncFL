@@ -143,7 +143,7 @@ class BaseServer:
              self.results['train_loss'].append(self.results['train_loss'][-1] if self.results['train_loss'] else None)
 
 
-         print(f"Iter: {self.current_server_iteration:<4} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Avg Train Loss: {f'{avg_train_loss:7.4f}' if avg_train_loss is not None else 'N/A'}")
+         print(f"Iter: {self.current_server_iteration:<4} | Time: {current_time:7.2f}s | Test Loss: {test_loss:7.4f} | Test Acc: {test_acc:6.2f}% | Avg Train Loss: {f'{avg_train_loss:7.4f}' if avg_train_loss is not None else 'N/A'}\n")
 
 
     def run(self):

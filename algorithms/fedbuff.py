@@ -54,7 +54,7 @@ class FedBuffServer(BaseServer):
         self.idle_clients = list(range(len(clients))) # IDs of clients available
         random.shuffle(self.idle_clients)
         self.current_wall_time = 0.0
-        self.server_update_counter = 0 # Counter for server steps based on buffer flushes
+        self.current_server_iteration = 0 # Counter for server steps based on buffer flushes
 
         # Track model version sent to each client
         self.client_model_versions: Dict[int, int] = {}
@@ -154,7 +154,7 @@ class FedBuffServer(BaseServer):
             self.client_model_versions[client_id] = 0
 
         # Main simulation loop (event-driven)
-        while self.server_update_counter < self.max_server_iterations:
+        while self.current_server_iteration < self.max_server_iterations:
             if not self.client_completion_events:
                 print("Warning: No more client events. Stopping simulation.")
                 break
@@ -172,8 +172,9 @@ class FedBuffServer(BaseServer):
             # TODO: Ensure client side returns the delta, version number, loss, samples
             # update_delta, loss, samples = self.clients[client_id].get_update_delta() 
             # For now, let's mock this return value structure
+            initial_weights_client = copy.deepcopy(self.clients[client_id].model.state_dict())
             client_model_trained, loss, samples = self.clients[client_id].train() # Assume train returns new weights
-            initial_weights_client = self.clients[client_id].model.state_dict() # Approximation of weights client started with
+            # initial_weights_client = self.clients[client_id].model.state_dict() # Approximation of weights client started with
             update_delta = {name: client_model_trained[name].cpu() - initial_weights_client[name].cpu() 
                             for name in client_model_trained}
 
@@ -188,7 +189,7 @@ class FedBuffServer(BaseServer):
 
             # Trigger server update if buffer is full
             if len(self.update_buffer) >= self.buffer_size_k:
-                print(f"  Buffer full. Performing server update {self.server_update_counter + 1}...")
+                print(f"  Buffer full. Performing server update {self.current_server_iteration + 1}...")
                 
                 averaged_delta = self.aggregate(self.update_buffer) # Gets the averaged delta
 
@@ -199,35 +200,37 @@ class FedBuffServer(BaseServer):
                                    for name in current_weights}
                 self.set_model_weights(new_weights)
 
-                self.server_update_counter += 1
+                self.current_server_iteration += 1
                 self.update_buffer = [] # Clear buffer
 
-                print(f"  Server model updated. Iteration: {self.server_update_counter}")
+                print(f"  Server model updated. Iteration: {self.current_server_iteration}")
                 
                  # Evaluate and Log periodically based on server updates
-                if self.server_update_counter % self.eval_interval == 0 or self.server_update_counter == self.max_server_iterations:
+                if self.current_server_iteration % self.eval_interval == 0 or self.current_server_iteration == self.max_server_iterations:
                      # Need a way to track avg train loss across buffer flushes if desired
                      self.log_results(avg_train_loss=loss) # Using last client's loss as proxy for now
 
 
-            # Assign new work to an idle client if available
-            if self.idle_clients:
-                new_client_id = self.idle_clients.pop(0)
-                self.active_clients.add(new_client_id)
-                current_server_weights = self.get_model_weights()
-                self.clients[new_client_id].set_model_weights(copy.deepcopy(current_server_weights))
-                
-                # Simulate delay for the new task
-                delay = simulate_delay(new_client_id, **self.delay_config)
-                completion_time = self.current_wall_time + delay
-                
-                current_model_ver = self.server_update_counter # Model version the client starts with
-                heapq.heappush(self.client_completion_events, (completion_time, new_client_id, current_model_ver))
-                self.client_model_versions[new_client_id] = current_model_ver
-                print(f"  Assigned Client {new_client_id} with model ver {current_model_ver}. Est completion: {completion_time:.2f}s")
-            else:
+            
+            if not self.idle_clients:
                 # If no idle clients, the completed client becomes idle immediately
-                 self.idle_clients.append(client_id)
+                self.idle_clients.append(client_id)
+
+            # Assign new work to an idle client if available
+            new_client_id = self.idle_clients.pop(0)
+            self.active_clients.add(new_client_id)
+            current_server_weights = self.get_model_weights()
+            self.clients[new_client_id].set_model_weights(copy.deepcopy(current_server_weights))
+            
+            # Simulate delay for the new task
+            delay = simulate_delay(new_client_id, **self.delay_config)
+            completion_time = self.current_wall_time + delay
+            
+            current_model_ver = self.current_server_iteration # Model version the client starts with
+            heapq.heappush(self.client_completion_events, (completion_time, new_client_id, current_model_ver))
+            self.client_model_versions[new_client_id] = current_model_ver
+            print(f"  Assigned Client {new_client_id} with model ver {current_model_ver}. Est completion: {completion_time:.2f}s")
+                
 
 
             # Optional: Check for wall clock time limit
@@ -237,10 +240,10 @@ class FedBuffServer(BaseServer):
                  break
 
         print("\nFedBuff simulation finished.")
-        if self.server_update_counter < self.max_server_iterations:
-             print(f"Stopped early at server iteration {self.server_update_counter}")
+        if self.current_server_iteration < self.max_server_iterations:
+             print(f"Stopped early at server iteration {self.current_server_iteration}")
              # Perform final evaluation if needed and not done
-             if self.results['server_iteration'][-1] != self.server_update_counter:
+             if self.results['server_iteration'][-1] != self.current_server_iteration:
                   self.log_results(avg_train_loss=None)
 
 

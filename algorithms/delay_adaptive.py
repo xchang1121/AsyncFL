@@ -139,9 +139,10 @@ class DelayAdaptiveAFLServer(BaseServer):
             completion_time, client_id, model_version_trained = heapq.heappop(self.client_completion_events)
             self.current_wall_time = completion_time
             self.active_clients.remove(client_id)
-            
+
+            initial_weights_client = copy.deepcopy(self.clients[client_id].model.state_dict())
             client_model_trained, loss, samples = self.clients[client_id].train()
-            initial_weights_client = self.clients[client_id].model.state_dict()
+            # initial_weights_client = self.clients[client_id].model.state_dict()
             update_delta = {name: client_model_trained[name].cpu() - initial_weights_client[name].cpu() 
                             for name in client_model_trained}
 

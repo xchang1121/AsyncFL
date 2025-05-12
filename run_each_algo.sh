@@ -10,6 +10,9 @@ rm -rf "$CONFIG_DIR"
 # Create output dir for generated config files
 mkdir -p "$CONFIG_DIR"
 
+# Activate virtual environment
+source venv/bin/activate
+
 # Python script to split the config into one per algorithm
 python3 - <<EOF
 import yaml
@@ -59,6 +62,3 @@ done
 wait
 
 echo "✅ All algorithms completed."
-
-# To kill all processes started by this script, you can use:
-# ps aux | grep "main.py --config generated_configs/" | grep -v grep | awk '{print $2}' | xargs kill

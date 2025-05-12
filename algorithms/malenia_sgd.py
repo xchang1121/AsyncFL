@@ -184,6 +184,7 @@ class MaleniaSGDServer(BaseServer):
             current_weights = self.get_model_weights()
             with torch.no_grad():
                  new_weights = {name: current_weights[name] - self.server_lr * aggregated_gradient[name] 
+                                if name in aggregated_gradient else current_weights[name]
                                for name in current_weights}
             self.set_model_weights(new_weights)
             

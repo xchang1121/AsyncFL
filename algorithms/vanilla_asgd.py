@@ -114,10 +114,11 @@ class VanillaASGDServer(BaseServer):
             # Client completed training
             self.active_clients.remove(client_id)
             
+            initial_weights_client = copy.deepcopy(self.clients[client_id].model.state_dict())
             # Get update (assuming client returns delta: w_new - w_old)
             client_model_trained, loss, samples = self.clients[client_id].train() # Assume train returns new weights
-            # Get the weights the client started with (approximate for simulation)
-            initial_weights_client = self.clients[client_id].model.state_dict() 
+            # # Get the weights the client started with (approximate for simulation)
+            # initial_weights_client = self.clients[client_id].model.state_dict() 
             update_delta = {name: client_model_trained[name].cpu() - initial_weights_client[name].cpu() 
                             for name in client_model_trained} # Delta_t^i
 
