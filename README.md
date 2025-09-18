@@ -2,11 +2,11 @@
 
 ## Overview
 
-This project implements and simulates various asynchronous federated learning (AFL) algorithms, including StaleSGD and its BDA variant, alongside several synchronous and asynchronous baselines. The goal is to provide a framework for comparing these algorithms under different conditions of data heterogeneity (non-IID) and communication/computation delays, based on the experiments and algorithms described in the referenced research papers.
+This project implements and simulates various asynchronous federated learning (AFL) algorithms, including AC-AFL and its BDA variant, alongside several synchronous and asynchronous baselines. The goal is to provide a framework for comparing these algorithms under different conditions of data heterogeneity (non-IID) and communication/computation delays, based on the experiments and algorithms described in the referenced research papers.
 
 ## Features
 
-* **Multiple Algorithms**: Implements StaleSGD, StaleSGD-BDA, FedAvg, Vanilla ASGD, FedBuff, CA2FL, Delay-adaptive AFL, and Malenia SGD.
+* **Multiple Algorithms**: Implements ACAFL, ACAFL-BDA, FedAvg, Vanilla ASGD, FedBuff, CA2FL, Delay-adaptive AFL, and Malenia SGD.
 * **Datasets**: Supports CIFAR-10 with plans for FEMNIST.
 * **Data Heterogeneity**: Simulates non-IID data distributions using Dirichlet partitioning ($\alpha$ parameter).
 * **Delay Simulation**: Models client delays using Exponential or Mixed Mode distributions.
@@ -44,7 +44,7 @@ stalesgd_afl_comparison/
 │   ├── ca2fl.py              # CA2FL (Async)
 │   ├── delay_adaptive.py     # Delay-Adaptive AFL (Async)
 │   ├── malenia_sgd.py        # Malenia SGD (Async)
-│   └── stalesgd.py           # StaleSGD-BDA (Async)
+│   └── stalesgd.py           # ACAFL-BDA (Async)
 ├── experiments/              # Experiment management
 │   ├── __init__.py
 │   └── experiment_manager.py # Sets up and runs experiments from config
@@ -90,7 +90,7 @@ Experiments are controlled via a YAML configuration file (e.g., `config.yaml`). 
     * `delay_config`: Defines the delay simulation (`distribution_type` and its `params`). Remember to call `assign_client_speeds` via the manager if using a 'mixed' type.
 * `algorithms`: A list of algorithms to run. Each entry specifies:
     * `name`: Matches a key in `ALGORITHM_MAP` in `experiment_manager.py`.
-    * `params`: Algorithm-specific hyperparameters (e.g., `client_fraction` for FedAvg, `buffer_size_k` for FedBuff/CA2FL, `server_lr` for async methods, `tau_algo` for StaleSGD-BDA, `malenia_S` for MaleniaSGD).
+    * `params`: Algorithm-specific hyperparameters (e.g., `client_fraction` for FedAvg, `buffer_size_k` for FedBuff/CA2FL, `server_lr` for async methods, `tau_algo` for AC-AFL-BDA, `malenia_S` for MaleniaSGD).
 * `results_dir`: Base directory to save experiment results.
 
 ## Running Experiments
@@ -117,16 +117,17 @@ Located in the `algorithms/` directory:
 * **`ca2fl.py` (CA2FLServer)**: Cache-Aided ASGD. Extends FedBuff by maintaining client caches ($h_i$) and calibrating updates ($\Delta_i - h_i$) before buffering and aggregation.
 * **`delay_adaptive.py` (DelayAdaptiveAFLServer)**: Applies updates immediately but uses an adaptive learning rate scaled based on update staleness ($\tau_t$) relative to a threshold ($\tau_C$). Based on Koloskova et al., 2022.
 * **`malenia_sgd.py` (MaleniaSGDServer)**: Collects `S` gradients computed based *only* on the current model version ($w^k$) before updating ($w^{k+1} = w^k - \eta g^k$). Discards stale gradients. *Requires client to return gradients.*
-* **`stalesgd.py` (StaleSGDServer)**: Implements StaleSGD-BDA. Maintains a cache of the latest gradient ($U_i$) and its model dispatch iteration ($t_i^{start}$) for each client. Aggregates cached gradients from clients whose staleness ($t - t_i^{start}$) is within $\tau_{algo}$. *Requires client to return gradients.*
+* **`stalesgd.py` (StaleSGDServer)**: Implements AC-AFL-BDA. Maintains a cache of the latest gradient ($U_i$) and its model dispatch iteration ($t_i^{start}$) for each client. Aggregates cached gradients from clients whose staleness ($t - t_i^{start}$) is within $\tau_{algo}$. *Requires client to return gradients.*
 
 ## Potential Improvements / TODO
 
-* **Client Update Type Unification**: The `BaseClient` was updated to support returning weights, deltas, or gradients via the `return_type` parameter. Ensure this parameter is correctly set when initializing clients for each specific algorithm in `ExperimentManager`. MaleniaSGD and StaleSGD require `'gradient'`, FedBuff and CA2FL require `'delta'`, FedAvg requires `'weights'` (or delta, server needs adjustment). VanillaASGD and DelayAdaptive usually use `'delta'` or `'gradient'`.
+* **Client Update Type Unification**: The `BaseClient` was updated to support returning weights, deltas, or gradients via the `return_type` parameter. Ensure this parameter is correctly set when initializing clients for each specific algorithm in `ExperimentManager`. MaleniaSGD and AC-AFL require `'gradient'`, FedBuff and CA2FL require `'delta'`, FedAvg requires `'weights'` (or delta, server needs adjustment). VanillaASGD and DelayAdaptive usually use `'delta'` or `'gradient'`.
 * **FEMNIST Dataset**: `datasets/femnist.py` needs implementation. This typically involves downloading/processing data from the LEAF benchmark repository, which uses `.h5` files. Will require adding `h5py` and `Pillow` to requirements. Need to handle its native user partitioning.
 * **Plotting Utility**: `utils/plotting.py` needs implementation. It should load the saved `.pt` result files from an experiment run directory and generate comparison plots (e.g., Test Accuracy vs. Server Iterations, Test Accuracy vs. Wall-Clock Time, Test Loss vs. ...) for the different algorithms.
 * **Hyperparameter Tuning**: The parameters in the example `config.yaml` are illustrative. Finding optimal hyperparameters (learning rates, buffer sizes, $\tau_{algo}$, `S`, etc.) for each algorithm on each dataset is crucial for fair comparison and requires systematic tuning (e.g., grid search, Bayesian optimization).
 * **MaleniaSGD Stopping Condition**: The current implementation uses a simplified condition (collect `S` valid gradients). Implementing the exact harmonic mean condition from Method 6, while handling $B_i=0$ cases robustly, could be explored if the simpler condition proves inadequate.
-* **StaleSGD Conceptual Implementation**: The code implements StaleSGD-BDA. The conceptual version (Algorithm 1 in the paper) could be added as a separate class or configuration option (e.g., `tau_algo = infinity`). Option B (incremental updates) would require client-side changes (storing previous gradient, sending difference).
-* **Asynchronous Simulation Granularity**: The current event loop advances time based on client completions. Server steps in StaleSGD/CA2FL/FedBuff are triggered somewhat heuristically based on client arrivals or counts. A more fine-grained simulation might explicitly model server processing time and trigger updates based on elapsed time or average arrival rates.
+* **AC-AFL Conceptual Implementation**: The code implements AC-AFL-BDA. The conceptual version (Algorithm 1 in the paper) could be added as a separate class or configuration option (e.g., `tau_algo = infinity`). Option B (incremental updates) would require client-side changes (storing previous gradient, sending difference).
+* **Asynchronous Simulation Granularity**: The current event loop advances time based on client completions. Server steps in AC-AFL/CA2FL/FedBuff are triggered somewhat heuristically based on client arrivals or counts. A more fine-grained simulation might explicitly model server processing time and trigger updates based on elapsed time or average arrival rates.
 * **Resource Simulation**: Client computation time simulation is currently basic and commented out in `BaseClient`. Network simulation (bandwidth, latency variability) is not included. Adding these could provide more realistic wall-clock time estimates.
+
 * **Code Refinements**: Further code cleanup, adding more detailed logging (e.g., average staleness per round), and unit/integration tests would improve robustness.
